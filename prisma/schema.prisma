@@ -1,0 +1,85 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String?
+  firstName String?
+  lastName  String?
+  whoopId   Int?     @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  whoopAccount     WhoopAccount?
+  medications      Medication[]
+  medicationEvents MedicationEvent[]
+  dailyMetrics     DailyMetric[]
+}
+
+model WhoopAccount {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  accessToken  String
+  refreshToken String
+  expiresAt    DateTime
+  scope        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Medication {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  category  String   @default("supplement")
+  doseUnit  String   @default("mg")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events MedicationEvent[]
+
+  @@unique([userId, name])
+}
+
+model MedicationEvent {
+  id           String   @id @default(cuid())
+  userId       String
+  medicationId String
+  dose         Float
+  takenAt      DateTime
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  medication Medication @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, takenAt])
+}
+
+model DailyMetric {
+  id               String   @id @default(cuid())
+  userId           String
+  date             DateTime @db.Date
+  recoveryScore    Float?
+  sleepDurationMin Float?
+  sleepEfficiency  Float?
+  restingHeartRate Float?
+  hrv              Float?
+  strain           Float?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
