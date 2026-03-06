@@ -3,7 +3,7 @@ import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import {
   fetchCycles,
-  fetchRecoveries,
+  fetchRecoveryForCycle,
   fetchSleepRecords,
 } from "@/lib/whoop-client";
 
@@ -19,28 +19,35 @@ export async function POST() {
       Date.now() - 30 * 24 * 60 * 60 * 1000
     ).toISOString();
 
-    // Fetch all data in parallel
-    const [cycles, recoveries, sleepRecords] = await Promise.all([
+    // Fetch cycles and sleep in parallel
+    const [cyclesResult, sleepResult] = await Promise.all([
       fetchCycles(user.id, startDate, endDate),
-      fetchRecoveries(user.id, startDate, endDate),
       fetchSleepRecords(user.id, startDate, endDate),
     ]);
 
-    // Index recoveries by cycle_id for easy lookup
-    const recoveryByCycle = new Map(
-      recoveries
-        .filter((r) => r.score_state === "SCORED" && r.score)
-        .map((r) => [r.cycle_id, r])
-    );
+    const cycles = cyclesResult.data;
+    const sleepRecords = sleepResult.data;
+    const warnings: string[] = [];
 
-    // Index sleep records by id — recoveries reference sleep_id
-    // But we'll match sleep by date instead for daily metrics
+    if (!cyclesResult.ok) warnings.push(`Cycles: ${cyclesResult.error}`);
+    if (!sleepResult.ok) warnings.push(`Sleep: ${sleepResult.error}`);
+
+    console.log(`[SYNC] Cycles: ${cycles.length}, Sleep: ${sleepRecords.length}`);
+
+    if (cycles.length === 0) {
+      return NextResponse.json({
+        success: true,
+        synced: 0,
+        warnings,
+        message: "No cycle data available to sync",
+      });
+    }
+
+    // Index sleep records by date
     const sleepByDate = new Map<string, (typeof sleepRecords)[0]>();
     for (const s of sleepRecords) {
       if (s.nap || s.score_state !== "SCORED" || !s.score) continue;
-      // Use the end date (wake time) as the "day" for this sleep
-      const day = s.end.slice(0, 10); // YYYY-MM-DD
-      // Keep only the longest sleep per day (ignore naps)
+      const day = s.end.slice(0, 10);
       const existing = sleepByDate.get(day);
       if (
         !existing ||
@@ -52,6 +59,8 @@ export async function POST() {
     }
 
     let upsertedCount = 0;
+    let recoveryCount = 0;
+    let recoveryFailCount = 0;
 
     for (const cycle of cycles) {
       if (cycle.score_state !== "SCORED" || !cycle.end) continue;
@@ -59,10 +68,16 @@ export async function POST() {
       const dayStr = cycle.start.slice(0, 10);
       const date = new Date(dayStr + "T00:00:00.000Z");
 
-      const recovery = recoveryByCycle.get(cycle.id);
+      // Fetch recovery per-cycle
+      const recovery = await fetchRecoveryForCycle(user.id, cycle.id);
+      if (recovery?.score) {
+        recoveryCount++;
+      } else {
+        recoveryFailCount++;
+      }
+
       const sleep = sleepByDate.get(dayStr);
 
-      // Compute sleep duration in minutes from stage summary
       let sleepDurationMin: number | null = null;
       let sleepEfficiency: number | null = null;
 
@@ -102,12 +117,19 @@ export async function POST() {
       upsertedCount++;
     }
 
+    if (recoveryFailCount > 0 && recoveryCount === 0) {
+      warnings.push(`Recovery: all ${recoveryFailCount} cycles returned no recovery data`);
+    }
+
+    console.log(`[SYNC] Done: ${upsertedCount} days synced, ${recoveryCount} recoveries, ${recoveryFailCount} recovery failures`);
+
     return NextResponse.json({
       success: true,
       synced: upsertedCount,
       cycles: cycles.length,
-      recoveries: recoveries.length,
+      recoveries: recoveryCount,
       sleepRecords: sleepRecords.length,
+      warnings: warnings.length > 0 ? warnings : undefined,
     });
   } catch (err) {
     console.error("Sync error:", err);

@@ -1,6 +1,6 @@
 import { prisma } from "./prisma";
 
-const WHOOP_API_BASE = "https://api.prod.whoop.com/developer/v1";
+const WHOOP_API_BASE = "https://api.prod.whoop.com/developer/v2";
 const WHOOP_TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token";
 const WHOOP_AUTH_URL = "https://api.prod.whoop.com/oauth/oauth2/auth";
 
@@ -178,7 +178,7 @@ async function fetchAllPaginated<T>(
   path: string,
   startDate: string,
   endDate: string
-): Promise<T[]> {
+): Promise<{ data: T[]; ok: boolean; error?: string }> {
   const all: T[] = [];
   let nextToken: string | null = null;
 
@@ -190,22 +190,28 @@ async function fetchAllPaginated<T>(
     });
     if (nextToken) params.set("nextToken", nextToken);
 
-    const res = await whoopFetch(userId, `${path}?${params.toString()}`);
+    const fullPath = `${path}?${params.toString()}`;
+    console.log(`[WHOOP] Fetching: ${fullPath}`);
+    const res = await whoopFetch(userId, fullPath);
+
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`Fetch ${path} failed: ${res.status} ${text}`);
+      const msg = `${path} failed: ${res.status} ${text}`;
+      console.warn(`[WHOOP] ${msg}`);
+      return { data: [], ok: false, error: msg };
     }
 
-    const data: PaginatedResponse<T> = await res.json();
-    all.push(...data.records);
-    nextToken = data.next_token;
+    const body: PaginatedResponse<T> = await res.json();
+    all.push(...body.records);
+    nextToken = body.next_token;
   } while (nextToken);
 
-  return all;
+  console.log(`[WHOOP] ${path}: fetched ${all.length} records`);
+  return { data: all, ok: true };
 }
 
 export interface WhoopCycle {
-  id: number;
+  id: string;
   user_id: number;
   start: string;
   end?: string;
@@ -219,8 +225,8 @@ export interface WhoopCycle {
 }
 
 export interface WhoopRecovery {
-  cycle_id: number;
-  sleep_id: number;
+  cycle_id: string;
+  sleep_id: string;
   user_id: number;
   created_at: string;
   score_state: string;
@@ -235,7 +241,7 @@ export interface WhoopRecovery {
 }
 
 export interface WhoopSleep {
-  id: number;
+  id: string;
   user_id: number;
   start: string;
   end: string;
@@ -260,22 +266,28 @@ export async function fetchCycles(
   userId: string,
   startDate: string,
   endDate: string
-): Promise<WhoopCycle[]> {
-  return fetchAllPaginated(userId, "/cycle", startDate, endDate);
+) {
+  return fetchAllPaginated<WhoopCycle>(userId, "/cycle", startDate, endDate);
 }
 
-export async function fetchRecoveries(
+export async function fetchRecoveryForCycle(
   userId: string,
-  startDate: string,
-  endDate: string
-): Promise<WhoopRecovery[]> {
-  return fetchAllPaginated(userId, "/recovery", startDate, endDate);
+  cycleId: string
+): Promise<WhoopRecovery | null> {
+  const path = `/cycle/${cycleId}/recovery`;
+  const res = await whoopFetch(userId, path);
+  if (!res.ok) {
+    console.warn(`[WHOOP] Recovery ${cycleId}: ${res.status}`);
+    return null;
+  }
+  const data = await res.json();
+  return data;
 }
 
 export async function fetchSleepRecords(
   userId: string,
   startDate: string,
   endDate: string
-): Promise<WhoopSleep[]> {
-  return fetchAllPaginated(userId, "/activity/sleep", startDate, endDate);
+) {
+  return fetchAllPaginated<WhoopSleep>(userId, "/activity/sleep", startDate, endDate);
 }

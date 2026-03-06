@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
 
     // Fetch user profile using the new access token directly
     const profileRes = await fetch(
-      "https://api.prod.whoop.com/developer/v1/user/profile/basic",
+      "https://api.prod.whoop.com/developer/v2/user/profile/basic",
       {
         headers: { Authorization: `Bearer ${tokens.access_token}` },
       }
